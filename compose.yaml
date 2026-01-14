@@ -13,6 +13,8 @@ services:
 
   application:
     build: .
+    env_file:
+      - .env
     container_name: app
     depends_on:
       - postgres

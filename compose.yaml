@@ -8,18 +8,30 @@ services:
       POSTGRES_PASSWORD: postgres
     ports:
       - "5432:5432"
+
+  goose:
+    image: golang:1.25
+    container_name: goose-migrator
+    working_dir: /app
     volumes:
-      - pgdata:/var/lib/postgresql/data
+      - .:/app
+    env_file:
+      - .env
+    depends_on:
+      - postgres
+    command: >
+      sh -c "
+      go install github.com/pressly/goose/v3/cmd/goose@latest &&
+      goose -dir migrations postgres \"$DATABASE_URL\" up
+      "
 
   application:
     build: .
+    container_name: app
     env_file:
       - .env
-    container_name: app
     depends_on:
-      - postgres
+      goose:
+        condition: service_completed_successfully
     ports:
       - "8080:8080"
-
-volumes:
-  pgdata:

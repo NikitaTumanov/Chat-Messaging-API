@@ -2,11 +2,17 @@ package server
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strconv"
 	"strings"
 
 	"github.com/NikitaTumanov/Chat-Messaging-API/internal/pkg/database/repository"
+)
+
+var (
+	errMethodNotAllowed = errors.New("method not allowed")
+	errInvalidChatID    = errors.New("invalid chat id")
 )
 
 type HTTPHandler interface {
@@ -36,14 +42,14 @@ func (s *Handler) Route(w http.ResponseWriter, r *http.Request) {
 		case http.MethodPost:
 			s.CreateChatHandler(w, r)
 		default:
-			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			http.Error(w, errMethodNotAllowed.Error(), http.StatusMethodNotAllowed)
 		}
 		return
 	}
 
 	id, err := strconv.Atoi(parts[0])
 	if err != nil {
-		http.Error(w, "invalid chat id", http.StatusBadRequest)
+		http.Error(w, errInvalidChatID.Error(), http.StatusBadRequest)
 		return
 	}
 
@@ -54,7 +60,7 @@ func (s *Handler) Route(w http.ResponseWriter, r *http.Request) {
 		case http.MethodDelete:
 			s.DeleteChatHandler(w, r, id)
 		default:
-			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			http.Error(w, errMethodNotAllowed.Error(), http.StatusMethodNotAllowed)
 		}
 		return
 	}
@@ -64,7 +70,7 @@ func (s *Handler) Route(w http.ResponseWriter, r *http.Request) {
 		case http.MethodPost:
 			s.SendMessageHandler(w, r, id)
 		default:
-			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			http.Error(w, errMethodNotAllowed.Error(), http.StatusMethodNotAllowed)
 		}
 		return
 	}
@@ -81,6 +87,12 @@ func (s *Handler) CreateChatHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Handler) SendMessageHandler(w http.ResponseWriter, r *http.Request, id int) {
+	_, err := s.chats.GetByID(r.Context(), 100)
+	if err != nil {
+		http.Error(w, errInvalidChatID.Error(), http.StatusNotFound)
+		return
+	}
+
 	message, err := s.messages.Create(r.Context(), 1, "sdfsdfsdf")
 	if err != nil {
 
@@ -89,9 +101,9 @@ func (s *Handler) SendMessageHandler(w http.ResponseWriter, r *http.Request, id 
 }
 
 func (s *Handler) GetChatHandler(w http.ResponseWriter, r *http.Request, id int) {
-	chat, err := s.chats.GetByID(r.Context(), id)
+	chat, err := s.chats.GetByIDWithMessages(r.Context(), id, 5)
 	if err != nil {
-		http.NotFound(w, r)
+		http.Error(w, errInvalidChatID.Error(), http.StatusNotFound)
 		return
 	}
 	json.NewEncoder(w).Encode(chat)
@@ -101,6 +113,7 @@ func (s *Handler) DeleteChatHandler(w http.ResponseWriter, r *http.Request, id i
 	err := s.chats.Delete(r.Context(), id)
 	if err != nil {
 		http.Error(w, "delete failed", http.StatusInternalServerError)
+		return
 	}
 	w.WriteHeader(http.StatusNoContent)
 }

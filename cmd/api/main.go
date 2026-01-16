@@ -1,11 +1,12 @@
 package main
 
 import (
-	"log"
+	"log/slog"
 	"net/http"
 	"os"
 
 	"github.com/NikitaTumanov/Chat-Messaging-API/internal/pkg/database/repository"
+	"github.com/NikitaTumanov/Chat-Messaging-API/internal/pkg/logger"
 	"github.com/NikitaTumanov/Chat-Messaging-API/internal/pkg/server"
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
@@ -15,32 +16,38 @@ const (
 	defaultPort = ":8080"
 )
 
-func connectDB() *gorm.DB {
+func connectDB(log *slog.Logger) *gorm.DB {
 	dsn := os.Getenv("DATABASE_URL")
 	if dsn == "" {
-		log.Fatal("DATABASE_URL in .env is not exists")
+		log.Error("DATABASE_URL in .env is not exists")
 	}
 
 	db, err := gorm.Open(postgres.Open(dsn), &gorm.Config{})
 	if err != nil {
-		log.Fatal(err)
+		log.Error("failed to connect to DB", "error", err)
 	}
 	return db
 }
 
 func main() {
-	db := connectDB()
+	log := logger.New()
+
+	db := connectDB(log)
 
 	chatRepo := repository.NewChatRepository(db)
 	msgRepo := repository.NewMessageRepository(db)
 
 	var handler server.HTTPHandler
-	handler = server.NewHandler(chatRepo, msgRepo)
+	handler = server.NewHandler(log, chatRepo, msgRepo)
 
-	http.HandleFunc("/chats/", handler.Route)
+	mux := http.NewServeMux()
+	mux.HandleFunc("/chats/", handler.Route)
 
-	err := http.ListenAndServe(defaultPort, nil)
+	loggedMux := server.LoggingMiddleware(log, mux)
+
+	log.Info("server started", "port", defaultPort)
+	err := http.ListenAndServe(defaultPort, loggedMux)
 	if err != nil {
-		log.Fatal()
+		log.Error("server stopped", "error", err)
 	}
 }

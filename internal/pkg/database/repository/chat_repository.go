@@ -17,6 +17,13 @@ var (
 	ErrInternal      = errors.New("internal error")
 )
 
+type ChatRepo interface {
+	GetByID(ctx context.Context, id int) (*model.Chat, error)
+	GetByIDWithMessages(ctx context.Context, id int, limit int) (*model.Chat, error)
+	Create(ctx context.Context, title string) (*model.Chat, error)
+	Delete(ctx context.Context, id int) error
+}
+
 type ChatRepository struct {
 	db *gorm.DB
 }

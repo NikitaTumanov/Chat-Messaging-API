@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"strconv"
 	"strings"
@@ -31,12 +32,14 @@ type HTTPHandler interface {
 }
 
 type Handler struct {
-	chats    *repository.ChatRepository
-	messages *repository.MessageRepository
+	log      *slog.Logger
+	chats    repository.ChatRepo
+	messages repository.MessageRepo
 }
 
-func NewHandler(chatRepo *repository.ChatRepository, msgRepo *repository.MessageRepository) *Handler {
+func NewHandler(log *slog.Logger, chatRepo repository.ChatRepo, msgRepo repository.MessageRepo) *Handler {
 	return &Handler{
+		log:      log,
 		chats:    chatRepo,
 		messages: msgRepo,
 	}
@@ -137,6 +140,10 @@ func (s *Handler) CreateChatHandler(w http.ResponseWriter, r *http.Request) {
 
 	chat, err := s.chats.Create(r.Context(), request.Title)
 	if err != nil {
+		s.log.Error("failed to create chat",
+			"error", err,
+			"title", request.Title,
+		)
 		writeDBError(w, err)
 		return
 	}
@@ -179,6 +186,10 @@ func (s *Handler) SendMessageHandler(w http.ResponseWriter, r *http.Request, id 
 		case repository.ErrNotFound:
 			http.Error(w, err.Error(), http.StatusNotFound)
 		default:
+			s.log.Error("failed to get chat by ID",
+				"error", err,
+				"text", request.Text,
+			)
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 		}
 		return
@@ -186,6 +197,10 @@ func (s *Handler) SendMessageHandler(w http.ResponseWriter, r *http.Request, id 
 
 	message, err := s.messages.Create(r.Context(), chat.ID, request.Text)
 	if err != nil {
+		s.log.Error("failed to add message to chat",
+			"error", err,
+			"text", request.Text,
+		)
 		writeDBError(w, err)
 		return
 	}
@@ -226,6 +241,10 @@ func (s *Handler) GetChatHandler(w http.ResponseWriter, r *http.Request, id int)
 
 	chat, err := s.chats.GetByIDWithMessages(r.Context(), id, request.Limit)
 	if err != nil {
+		s.log.Error("failed to get chat by ID with messages",
+			"error", err,
+			"limit", request.Limit,
+		)
 		writeDBError(w, err)
 		return
 	}
@@ -238,6 +257,9 @@ func (s *Handler) GetChatHandler(w http.ResponseWriter, r *http.Request, id int)
 func (s *Handler) DeleteChatHandler(w http.ResponseWriter, r *http.Request, id int) {
 	err := s.chats.Delete(r.Context(), id)
 	if err != nil {
+		s.log.Error("failed to delete chat by ID with messages",
+			"error", err,
+		)
 		writeDBError(w, err)
 		return
 	}

@@ -7,6 +7,10 @@ import (
 	"gorm.io/gorm"
 )
 
+type MessageRepo interface {
+	Create(ctx context.Context, chatID int, text string) (*model.Message, error)
+}
+
 type MessageRepository struct {
 	db *gorm.DB
 }

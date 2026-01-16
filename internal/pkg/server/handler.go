@@ -3,16 +3,27 @@ package server
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/NikitaTumanov/Chat-Messaging-API/internal/pkg/database/repository"
+	"github.com/NikitaTumanov/Chat-Messaging-API/internal/pkg/model"
+)
+
+const (
+	titleLimit   = 200
+	textLimit    = 5000
+	defaultLimit = 20
+	maxLimit     = 100
 )
 
 var (
 	errMethodNotAllowed = errors.New("method not allowed")
 	errInvalidChatID    = errors.New("invalid chat id")
+	errInvalidJSON      = errors.New("invalid json")
 )
 
 type HTTPHandler interface {
@@ -48,7 +59,7 @@ func (s *Handler) Route(w http.ResponseWriter, r *http.Request) {
 	}
 
 	id, err := strconv.Atoi(parts[0])
-	if err != nil {
+	if err != nil || id < 0 {
 		http.Error(w, errInvalidChatID.Error(), http.StatusBadRequest)
 		return
 	}
@@ -78,42 +89,158 @@ func (s *Handler) Route(w http.ResponseWriter, r *http.Request) {
 	http.NotFound(w, r)
 }
 
-func (s *Handler) CreateChatHandler(w http.ResponseWriter, r *http.Request) {
-	chat, err := s.chats.Create(r.Context(), "qwerty")
-	if err != nil {
-		w.Write([]byte("ascasc"))
+func writeDBError(w http.ResponseWriter, err error) {
+	switch err {
+	case repository.ErrNotFound:
+		http.Error(w, "not found", http.StatusNotFound)
+
+	case repository.ErrAlreadyExists:
+		http.Error(w, "already exists", http.StatusConflict)
+
+	case repository.ErrConflict:
+		http.Error(w, "conflict", http.StatusConflict)
+
+	case repository.ErrInvalidInput:
+		http.Error(w, "invalid input", http.StatusBadRequest)
+
+	default:
+		http.Error(w, "internal server error", http.StatusInternalServerError)
 	}
+}
+
+func (s *Handler) CreateChatHandler(w http.ResponseWriter, r *http.Request) {
+	var request model.CreateChatRequest
+
+	decoder := json.NewDecoder(r.Body)
+	decoder.DisallowUnknownFields()
+
+	err := decoder.Decode(&request)
+	if err != nil {
+		http.Error(w, errInvalidJSON.Error(), http.StatusBadRequest)
+		return
+	}
+
+	if decoder.More() {
+		http.Error(w, errInvalidJSON.Error(), http.StatusBadRequest)
+		return
+	}
+
+	request.Title = strings.TrimSpace(request.Title)
+	if request.Title == "" {
+		http.Error(w, "title is required", http.StatusBadRequest)
+		return
+	}
+	if utf8.RuneCountInString(request.Title) > titleLimit {
+		http.Error(w, fmt.Sprintf("title is longer than %d characters", titleLimit), http.StatusBadRequest)
+		return
+	}
+
+	chat, err := s.chats.Create(r.Context(), request.Title)
+	if err != nil {
+		writeDBError(w, err)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusCreated)
 	json.NewEncoder(w).Encode(chat)
 }
 
 func (s *Handler) SendMessageHandler(w http.ResponseWriter, r *http.Request, id int) {
-	_, err := s.chats.GetByID(r.Context(), 100)
+	var request model.SendMessageRequest
+
+	decoder := json.NewDecoder(r.Body)
+	decoder.DisallowUnknownFields()
+
+	err := decoder.Decode(&request)
 	if err != nil {
-		http.Error(w, errInvalidChatID.Error(), http.StatusNotFound)
+		http.Error(w, errInvalidJSON.Error(), http.StatusBadRequest)
 		return
 	}
 
-	message, err := s.messages.Create(r.Context(), 1, "sdfsdfsdf")
-	if err != nil {
-
+	if decoder.More() {
+		http.Error(w, errInvalidJSON.Error(), http.StatusBadRequest)
+		return
 	}
+
+	request.Text = strings.TrimSpace(request.Text)
+	if request.Text == "" {
+		http.Error(w, "text is required", http.StatusBadRequest)
+		return
+	}
+	if utf8.RuneCountInString(request.Text) > textLimit {
+		http.Error(w, fmt.Sprintf("text is longer than %d characters", textLimit), http.StatusBadRequest)
+		return
+	}
+
+	chat, err := s.chats.GetByID(r.Context(), id)
+	if err != nil {
+		switch err {
+		case repository.ErrNotFound:
+			http.Error(w, err.Error(), http.StatusNotFound)
+		default:
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+		}
+		return
+	}
+
+	message, err := s.messages.Create(r.Context(), chat.ID, request.Text)
+	if err != nil {
+		writeDBError(w, err)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusCreated)
 	json.NewEncoder(w).Encode(message)
 }
 
 func (s *Handler) GetChatHandler(w http.ResponseWriter, r *http.Request, id int) {
-	chat, err := s.chats.GetByIDWithMessages(r.Context(), id, 5)
+	var request model.GetChatRequest
+
+	decoder := json.NewDecoder(r.Body)
+	decoder.DisallowUnknownFields()
+
+	err := decoder.Decode(&request)
 	if err != nil {
-		http.Error(w, errInvalidChatID.Error(), http.StatusNotFound)
+		http.Error(w, errInvalidJSON.Error(), http.StatusBadRequest)
 		return
 	}
+
+	if decoder.More() {
+		http.Error(w, errInvalidJSON.Error(), http.StatusBadRequest)
+		return
+	}
+
+	if request.Limit == 0 {
+		request.Limit = defaultLimit
+	}
+	if request.Limit > maxLimit {
+		http.Error(w, fmt.Sprintf("limit is greater than %d", maxLimit), http.StatusBadRequest)
+		return
+	}
+	if request.Limit < 0 {
+		http.Error(w, fmt.Sprintf("limit should be between %d and %d", 1, maxLimit), http.StatusBadRequest)
+		return
+	}
+
+	chat, err := s.chats.GetByIDWithMessages(r.Context(), id, request.Limit)
+	if err != nil {
+		writeDBError(w, err)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
 	json.NewEncoder(w).Encode(chat)
 }
 
 func (s *Handler) DeleteChatHandler(w http.ResponseWriter, r *http.Request, id int) {
 	err := s.chats.Delete(r.Context(), id)
 	if err != nil {
-		http.Error(w, "delete failed", http.StatusInternalServerError)
+		writeDBError(w, err)
 		return
 	}
+
 	w.WriteHeader(http.StatusNoContent)
 }

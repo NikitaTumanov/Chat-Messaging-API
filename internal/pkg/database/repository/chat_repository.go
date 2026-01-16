@@ -10,11 +10,11 @@ import (
 )
 
 var (
-	errNotFound      = errors.New("entity not found")
-	errAlreadyExists = errors.New("entity already exists")
-	errConflict      = errors.New("conflict")
-	errInvalidInput  = errors.New("invalid input")
-	errInternal      = errors.New("internal error")
+	ErrNotFound      = errors.New("entity not found")
+	ErrAlreadyExists = errors.New("entity already exists")
+	ErrConflict      = errors.New("conflict")
+	ErrInvalidInput  = errors.New("invalid input")
+	ErrInternal      = errors.New("internal error")
 )
 
 type ChatRepository struct {
@@ -33,9 +33,9 @@ func (c *ChatRepository) GetByID(ctx context.Context, id int) (*model.Chat, erro
 	err := c.db.WithContext(ctx).First(&chat, id).Error
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return nil, errNotFound
+			return nil, ErrNotFound
 		}
-		return nil, errInternal
+		return nil, ErrInternal
 	}
 
 	return &chat, nil
@@ -49,12 +49,34 @@ func (c *ChatRepository) GetByIDWithMessages(ctx context.Context, id int, limit 
 	}).First(&chat, id).Error
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return nil, errNotFound
+			return nil, ErrNotFound
 		}
-		return nil, errInternal
+		return nil, ErrInternal
 	}
 
 	return &chat, nil
+}
+
+func validateSpecificDBError(err error) error {
+	if errors.Is(err, gorm.ErrInvalidTransaction) {
+		return ErrInternal
+	}
+
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) {
+		switch pgErr.Code {
+		case "23505":
+			return ErrAlreadyExists
+		case "23502":
+			return ErrInvalidInput
+		case "23503":
+			return ErrConflict
+		default:
+			return ErrInternal
+		}
+	}
+
+	return nil
 }
 
 func (c *ChatRepository) Create(ctx context.Context, title string) (*model.Chat, error) {
@@ -64,23 +86,7 @@ func (c *ChatRepository) Create(ctx context.Context, title string) (*model.Chat,
 
 	err := c.db.WithContext(ctx).Create(&chat).Error
 	if err != nil {
-		if errors.Is(err, gorm.ErrInvalidTransaction) {
-			return nil, errInternal
-		}
-
-		var pgErr *pgconn.PgError
-		if errors.As(err, &pgErr) {
-			switch pgErr.Code {
-			case "23505":
-				return nil, errAlreadyExists
-			case "23502":
-				return nil, errInvalidInput
-			case "23503":
-				return nil, errConflict
-			default:
-				return nil, errInternal
-			}
-		}
+		return nil, validateSpecificDBError(err)
 	}
 
 	return &chat, nil
@@ -89,10 +95,10 @@ func (c *ChatRepository) Create(ctx context.Context, title string) (*model.Chat,
 func (c *ChatRepository) Delete(ctx context.Context, id int) error {
 	result := c.db.WithContext(ctx).Delete(&model.Chat{}, id)
 	if result.Error != nil {
-		return errInternal
+		return ErrInternal
 	}
 	if result.RowsAffected == 0 {
-		return errNotFound
+		return ErrNotFound
 	}
 
 	return nil

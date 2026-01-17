@@ -42,7 +42,10 @@ func TestCreateChatHandler_OK(t *testing.T) {
 	handler.Route(rec, req)
 
 	res := rec.Result()
-	defer res.Body.Close()
+	defer func() {
+		err = res.Body.Close()
+		t.Logf("failed to close response body: %v", err)
+	}()
 
 	assert.Equal(t, http.StatusCreated, res.StatusCode)
 	assert.Equal(t, "application/json", res.Header.Get("Content-Type"))

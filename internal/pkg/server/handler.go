@@ -25,6 +25,7 @@ var (
 	errMethodNotAllowed = errors.New("method not allowed")
 	errInvalidChatID    = errors.New("invalid chat id")
 	errInvalidJSON      = errors.New("invalid json")
+	errFailedEncode     = errors.New("failed to encode response")
 )
 
 type HTTPHandler interface {
@@ -93,17 +94,17 @@ func (s *Handler) Route(w http.ResponseWriter, r *http.Request) {
 }
 
 func writeDBError(w http.ResponseWriter, err error) {
-	switch err {
-	case repository.ErrNotFound:
+	switch {
+	case errors.Is(err, repository.ErrNotFound):
 		http.Error(w, "not found", http.StatusNotFound)
 
-	case repository.ErrAlreadyExists:
+	case errors.Is(err, repository.ErrAlreadyExists):
 		http.Error(w, "already exists", http.StatusConflict)
 
-	case repository.ErrConflict:
+	case errors.Is(err, repository.ErrConflict):
 		http.Error(w, "conflict", http.StatusConflict)
 
-	case repository.ErrInvalidInput:
+	case errors.Is(err, repository.ErrInvalidInput):
 		http.Error(w, "invalid input", http.StatusBadRequest)
 
 	default:
@@ -112,12 +113,12 @@ func writeDBError(w http.ResponseWriter, err error) {
 }
 
 func (s *Handler) CreateChatHandler(w http.ResponseWriter, r *http.Request) {
-	var request model.CreateChatRequest
+	var req model.CreateChatRequest
 
 	decoder := json.NewDecoder(r.Body)
 	decoder.DisallowUnknownFields()
 
-	err := decoder.Decode(&request)
+	err := decoder.Decode(&req)
 	if err != nil {
 		http.Error(w, errInvalidJSON.Error(), http.StatusBadRequest)
 		return
@@ -128,21 +129,21 @@ func (s *Handler) CreateChatHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	request.Title = strings.TrimSpace(request.Title)
-	if request.Title == "" {
+	req.Title = strings.TrimSpace(req.Title)
+	if req.Title == "" {
 		http.Error(w, "title is required", http.StatusBadRequest)
 		return
 	}
-	if utf8.RuneCountInString(request.Title) > titleLimit {
+	if utf8.RuneCountInString(req.Title) > titleLimit {
 		http.Error(w, fmt.Sprintf("title is longer than %d characters", titleLimit), http.StatusBadRequest)
 		return
 	}
 
-	chat, err := s.chats.Create(r.Context(), request.Title)
+	chat, err := s.chats.Create(r.Context(), req.Title)
 	if err != nil {
 		s.log.Error("failed to create chat",
 			"error", err,
-			"title", request.Title,
+			"title", req.Title,
 		)
 		writeDBError(w, err)
 		return
@@ -150,16 +151,19 @@ func (s *Handler) CreateChatHandler(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
-	json.NewEncoder(w).Encode(chat)
+	err = json.NewEncoder(w).Encode(chat)
+	if err != nil {
+		http.Error(w, errFailedEncode.Error(), http.StatusInternalServerError)
+	}
 }
 
 func (s *Handler) SendMessageHandler(w http.ResponseWriter, r *http.Request, id int) {
-	var request model.SendMessageRequest
+	var req model.SendMessageRequest
 
 	decoder := json.NewDecoder(r.Body)
 	decoder.DisallowUnknownFields()
 
-	err := decoder.Decode(&request)
+	err := decoder.Decode(&req)
 	if err != nil {
 		http.Error(w, errInvalidJSON.Error(), http.StatusBadRequest)
 		return
@@ -170,36 +174,36 @@ func (s *Handler) SendMessageHandler(w http.ResponseWriter, r *http.Request, id 
 		return
 	}
 
-	request.Text = strings.TrimSpace(request.Text)
-	if request.Text == "" {
+	req.Text = strings.TrimSpace(req.Text)
+	if req.Text == "" {
 		http.Error(w, "text is required", http.StatusBadRequest)
 		return
 	}
-	if utf8.RuneCountInString(request.Text) > textLimit {
+	if utf8.RuneCountInString(req.Text) > textLimit {
 		http.Error(w, fmt.Sprintf("text is longer than %d characters", textLimit), http.StatusBadRequest)
 		return
 	}
 
 	chat, err := s.chats.GetByID(r.Context(), id)
 	if err != nil {
-		switch err {
-		case repository.ErrNotFound:
+		switch {
+		case errors.Is(err, repository.ErrNotFound):
 			http.Error(w, err.Error(), http.StatusNotFound)
 		default:
 			s.log.Error("failed to get chat by ID",
 				"error", err,
-				"text", request.Text,
+				"text", req.Text,
 			)
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 		}
 		return
 	}
 
-	message, err := s.messages.Create(r.Context(), chat.ID, request.Text)
+	message, err := s.messages.Create(r.Context(), chat.ID, req.Text)
 	if err != nil {
 		s.log.Error("failed to add message to chat",
 			"error", err,
-			"text", request.Text,
+			"text", req.Text,
 		)
 		writeDBError(w, err)
 		return
@@ -207,16 +211,19 @@ func (s *Handler) SendMessageHandler(w http.ResponseWriter, r *http.Request, id 
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
-	json.NewEncoder(w).Encode(message)
+	err = json.NewEncoder(w).Encode(message)
+	if err != nil {
+		http.Error(w, errFailedEncode.Error(), http.StatusInternalServerError)
+	}
 }
 
 func (s *Handler) GetChatHandler(w http.ResponseWriter, r *http.Request, id int) {
-	var request model.GetChatRequest
+	var req model.GetChatRequest
 
 	decoder := json.NewDecoder(r.Body)
 	decoder.DisallowUnknownFields()
 
-	err := decoder.Decode(&request)
+	err := decoder.Decode(&req)
 	if err != nil {
 		http.Error(w, errInvalidJSON.Error(), http.StatusBadRequest)
 		return
@@ -227,23 +234,23 @@ func (s *Handler) GetChatHandler(w http.ResponseWriter, r *http.Request, id int)
 		return
 	}
 
-	if request.Limit == 0 {
-		request.Limit = defaultLimit
+	if req.Limit == 0 {
+		req.Limit = defaultLimit
 	}
-	if request.Limit > maxLimit {
+	if req.Limit > maxLimit {
 		http.Error(w, fmt.Sprintf("limit is greater than %d", maxLimit), http.StatusBadRequest)
 		return
 	}
-	if request.Limit < 0 {
+	if req.Limit < 0 {
 		http.Error(w, fmt.Sprintf("limit should be between %d and %d", 1, maxLimit), http.StatusBadRequest)
 		return
 	}
 
-	chat, err := s.chats.GetByIDWithMessages(r.Context(), id, request.Limit)
+	chat, err := s.chats.GetByIDWithMessages(r.Context(), id, req.Limit)
 	if err != nil {
 		s.log.Error("failed to get chat by ID with messages",
 			"error", err,
-			"limit", request.Limit,
+			"limit", req.Limit,
 		)
 		writeDBError(w, err)
 		return
@@ -251,7 +258,10 @@ func (s *Handler) GetChatHandler(w http.ResponseWriter, r *http.Request, id int)
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(chat)
+	err = json.NewEncoder(w).Encode(chat)
+	if err != nil {
+		http.Error(w, errFailedEncode.Error(), http.StatusInternalServerError)
+	}
 }
 
 func (s *Handler) DeleteChatHandler(w http.ResponseWriter, r *http.Request, id int) {

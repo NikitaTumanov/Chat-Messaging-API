@@ -4,6 +4,7 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"time"
 
 	"github.com/NikitaTumanov/Chat-Messaging-API/internal/pkg/database/repository"
 	"github.com/NikitaTumanov/Chat-Messaging-API/internal/pkg/logger"
@@ -37,16 +38,24 @@ func main() {
 	chatRepo := repository.NewChatRepository(db)
 	msgRepo := repository.NewMessageRepository(db)
 
-	var handler server.HTTPHandler
-	handler = server.NewHandler(log, chatRepo, msgRepo)
+	handler := server.NewHandler(log, chatRepo, msgRepo)
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/chats/", handler.Route)
 
 	loggedMux := server.LoggingMiddleware(log, mux)
 
+	srv := &http.Server{
+		Addr:              defaultPort,
+		Handler:           loggedMux,
+		ReadTimeout:       5 * time.Second,
+		ReadHeaderTimeout: 5 * time.Second,
+		WriteTimeout:      10 * time.Second,
+		IdleTimeout:       60 * time.Second,
+	}
+
 	log.Info("server started", "port", defaultPort)
-	err := http.ListenAndServe(defaultPort, loggedMux)
+	err := srv.ListenAndServe()
 	if err != nil {
 		log.Error("server stopped", "error", err)
 	}
